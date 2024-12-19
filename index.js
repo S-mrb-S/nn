@@ -1,110 +1,119 @@
-const tf = require('@tensorflow/tfjs-node');
+const tf = require("@tensorflow/tfjs-node");
+const readline = require("readline");
 
-// داده‌های آموزشی
 const trainingData = [
-  "زندگی زیباست.",
-  "دوست داشتن خوب است.",
-  "امید همیشه وجود دارد.",
-  "خوشحالی در دل است.",
-  "دوستی ارزشمند است."
+  { text: "This movie was great!", label: 1 },
+  { text: "This movie was terrible.", label: 0 },
+  { text: "I love this book.", label: 1 },
+  { text: "This food is really delicious.", label: 1 },
+  { text: "This experience was awful.", label: 0 },
+  { text: "I absolutely hated this movie.", label: 0 },
+  { text: "What a fantastic experience!", label: 1 },
+  { text: "I will never watch this again.", label: 0 },
+  { text: "This is the best thing ever!", label: 1 },
+  { text: "I didn't like it at all.", label: 0 },
 ];
 
-// پیش‌پردازش داده‌ها
 const preprocessData = (data) => {
-  return data.map(sentence => sentence.toLowerCase().split(" "));
+  const sentences = data.map((item) => item.text.toLowerCase().split(" "));
+  const labels = data.map((item) => item.label);
+  return { sentences, labels };
 };
 
-const processedData = preprocessData(trainingData);
+const { sentences, labels } = preprocessData(trainingData);
 
-// ایجاد دیکشنری از کلمات
 const wordSet = new Set();
-processedData.forEach(sentence => {
-  sentence.forEach(word => wordSet.add(word));
+sentences.forEach((sentence) => {
+  sentence.forEach((word) => wordSet.add(word));
 });
 
 const wordList = Array.from(wordSet);
 const wordIndex = {};
 wordList.forEach((word, index) => {
-  wordIndex[word] = index;
+  wordIndex[word] = index + 1;
 });
 
-// کدگذاری جملات
 const encodeSentences = (sentences) => {
-  return sentences.map(sentence => {
-    return sentence.map(word => wordIndex[word]);
+  return sentences.map((sentence) => {
+    return sentence.map((word) => wordIndex[word] || 0);
   });
 };
 
-const encodedData = encodeSentences(processedData);
+const encodedData = encodeSentences(sentences);
 
-// ایجاد مدل
+const maxLength = Math.max(...encodedData.map((sentence) => sentence.length));
+const paddedData = encodedData.map((sentence) => {
+  const paddedSentence = sentence.slice(0, maxLength);
+  while (paddedSentence.length < maxLength) {
+    paddedSentence.push(0);
+  }
+  return paddedSentence;
+});
+
+// تغییرات در مدل
 const model = tf.sequential();
-model.add(tf.layers.embedding({ inputDim: wordList.length, outputDim: 8, inputLength: 5 }));
-model.add(tf.layers.lstm({ units: 128 }));
-model.add(tf.layers.dense({ units: wordList.length, activation: 'softmax' }));
-model.compile({ optimizer: 'adam', loss: 'sparseCategoricalCrossentropy' });
+model.add(
+  tf.layers.embedding({
+    inputDim: wordList.length + 1,
+    outputDim: 16, // افزایش ابعاد خروجی
+    inputLength: maxLength,
+  })
+);
+model.add(tf.layers.lstm({ units: 32, returnSequences: false })); // استفاده از LSTM
+model.add(tf.layers.dense({ units: 16, activation: "relu" })); // لایه Dense اضافی
+model.add(tf.layers.dense({ units: 1, activation: "sigmoid" }));
+model.compile({
+  optimizer: "adam",
+  loss: "binaryCrossentropy",
+  metrics: ["accuracy"],
+});
 
-// آموزش مدل
 const trainModel = async () => {
-  const xs = tf.tensor2d(
-    encodedData.map(sentence => {
-      const paddedSentence = sentence.slice(0, 5);
-      while (paddedSentence.length < 5) {
-        paddedSentence.push(0);
-      }
-      return paddedSentence;
-    })
-  );
-
-  const ys = tf.tensor1d(
-    encodedData.map(sentence => {
-      return sentence.length > 1 ? sentence[sentence.length - 1] : 0; // بررسی طول جمله
-    }),
-    'float32'
-  );
+  const xs = tf.tensor2d(paddedData);
+  const ys = tf.tensor1d(labels, "float32");
 
   await model.fit(xs, ys, {
     epochs: 100,
     batchSize: 1,
     callbacks: {
       onEpochEnd: (epoch, logs) => {
-        console.log(`Epoch ${epoch}: loss = ${logs.loss}`);
+        console.log(
+          `Epoch ${epoch}: loss = ${logs.loss}, accuracy = ${logs.acc}`
+        );
       },
     },
   });
 };
 
-// تولید متن
-const generateText = (input) => {
-    let generated = [...input];
-  
-    // اطمینان از اینکه ورودی 5 کلمه دارد
-    while (generated.length < 5) {
-      generated.unshift(0); // اضافه کردن 0 به ابتدای آرایه
-    }
-  
-    for (let i = 0; i < 5; i++) {
-      const inputTensor = tf.tensor2d([generated.slice(-5)]);
-      const prediction = model.predict(inputTensor);
-      const nextWordIndex = prediction.argMax(-1).dataSync()[0];
-  
-      // بررسی ایندکس قبل از اضافه کردن
-      if (nextWordIndex >= 0 && nextWordIndex < wordList.length) {
-        generated.push(nextWordIndex);
-      } else {
-        console.error("ایندکس نامعتبر:", nextWordIndex);
-        break; // یا می‌توانید یک مقدار پیش‌فرض اضافه کنید
-      }
-    }
-  
-    return generated.map(index => wordList[index]).join(" ");
-  };
-  
+const predictSentiment = (text) => {
+  const encodedText = encodeSentences([text.toLowerCase().split(" ")]);
+  const paddedText = encodedText[0].slice(0, maxLength);
+  while (paddedText.length < maxLength) {
+    paddedText.push(0);
+  }
 
-// اجرای برنامه
+  const inputTensor = tf.tensor2d([paddedText]);
+  const prediction = model.predict(inputTensor);
+  const sentiment = prediction.dataSync()[0];
+
+  return sentiment > 0.5 ? "Positive" : "Negative";
+};
+
+// تابع برای دریافت ورودی از کاربر
+const getUserInput = () => {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  rl.question("Enter a sentence to analyze its sentiment: ", (input) => {
+    const sentiment = predictSentiment(input);
+    console.log(`Sentence: "${input}" - Sentiment: ${sentiment}`);
+    rl.close();
+  });
+};
+
 (async () => {
   await trainModel();
-  const inputSentence = ["زندگی", "زیباست"];
-  const generatedText = generateText(inputSentence.map(word => wordIndex[word]));
-  console.log("متن تولید شده:", generatedText);
+  getUserInput(); // دریافت ورودی از کاربر
 })();
