@@ -8,5 +8,7 @@
   "author": "",
   "license": "ISC",
   "description": "",
-  "dependencies": { }
+  "dependencies": {
+    "@tensorflow/tfjs-node": "^4.22.0"
+  }
 }
